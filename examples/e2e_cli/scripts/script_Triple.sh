@@ -32,7 +32,7 @@ verifyResult () {
 
 #parameter 0-3,set global environment to individual peer0/1 on org1/2
 setGlobals () {
-
+	CORE_PEER_GOSSIP_USELEADERELECTION=true
 	if [ $1 -eq 0 -o $1 -eq 1 ] ; then
 		CORE_PEER_LOCALMSPID="Org1MSP"
 		CORE_PEER_TLS_ROOTCERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
@@ -123,7 +123,8 @@ joinChannel () {
 installChaincode () {
 	PEER=$1
 	setGlobals $PEER
-	peer chaincode install -n mycc -v 1.0 -p github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02 >&log.txt
+#	peer chaincode install -n mycc -v 1.0 -p github.com/hyperledger/fabric/examples/chaincode/go/chaincode_exampleVote >&log.txt
+	peer chaincode install -n mycc -v 1.0 -p github.com/hyperledger/fabric/examples/chaincode/go/chaincode_exampleTriple >&log.txt
 	res=$?
 	cat log.txt
         verifyResult $res "Chaincode installation on remote peer PEER$PEER has Failed"
@@ -138,9 +139,9 @@ instantiateChaincode () {
 	# while 'peer chaincode' command can get the orderer endpoint from the peer (if join was successful),
 	# lets supply it directly as we know it using the "-o" option
 	if [ -z "$CORE_PEER_TLS_ENABLED" -o "$CORE_PEER_TLS_ENABLED" = "false" ]; then
-		peer chaincode instantiate -o orderer.example.com:7050 -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":["init","a","100","b","200"]}' -P "OR	('Org1MSP.member','Org2MSP.member')" >&log.txt
+		peer chaincode instantiate -o orderer.example.com:7050 -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":[]}' -P "OR	('Org1MSP.member','Org2MSP.member')" >&log.txt
 	else
-		peer chaincode instantiate -o orderer.example.com:7050 --tls $CORE_PEER_TLS_ENABLED --cafile $ORDERER_CA -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":["init","a","100","b","200"]}' -P "OR	('Org1MSP.member','Org2MSP.member')" >&log.txt
+		peer chaincode instantiate -o orderer.example.com:7050 --tls $CORE_PEER_TLS_ENABLED --cafile $ORDERER_CA -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":[]}' -P "OR	('Org1MSP.member','Org2MSP.member')" >&log.txt
 	fi
 	res=$?
 	cat log.txt
@@ -150,7 +151,7 @@ instantiateChaincode () {
 }
 
 #invoke chaincode query
-chaincodeQuery () {
+chaincodeQuery_template () {
   PEER=$1
   echo "===================== Querying on PEER$PEER on channel '$CHANNEL_NAME'... ===================== "
   setGlobals $PEER
@@ -179,8 +180,36 @@ chaincodeQuery () {
   fi
 }
 
+chaincodeQuery(){
+	PEER=$1
+	subjectT=$2
+	predicateT=$3
+	echo "========== Querying on PEER$PEER about $predicateT of $subjectT on channel '$CHANNEL_NAME'... =========="
+	setGlobals $PEER
+	local rc=1
+	local starttime=$(date +%s)
+
+	while test "$(($(date +%s)-starttime))" -lt "$TIMEOUT" -a $rc -ne 0
+	do
+		sleep 3
+		echo "Attempting to Query PEER$PEER ...$(($(date +%s)-starttime)) secs"
+		peer chaincode query -C $CHANNEL_NAME -n mycc -c '{"Args":["queryAnswers","'${subjectT}'","'${predicateT}'"]}' >&log.txt
+		test $? -eq 0 && let rc=0
+	done
+	echo
+	cat log.txt
+	if test $rc -eq 0 ; then
+		echo "========== Query on PEER$PEER on channel '$CHANNEL_NAME' is successful =========="
+	else
+		echo "!!!!!!!!!! Query result on PEER$PEER is INVALID !!!!!!!!!!"
+			echo "========== ERROR !!! FAILED to execute End-2-End Scenario =========="
+		echo
+		exit 1
+	fi
+}
+
 #invoke chaincode invoke
-chaincodeInvoke () {
+chaincodeInvoke_template () {
 	PEER=$1
 	setGlobals $PEER
 	# while 'peer chaincode' command can get the orderer endpoint from the peer (if join was successful),
@@ -194,6 +223,25 @@ chaincodeInvoke () {
 	cat log.txt
 	verifyResult $res "Invoke execution on PEER$PEER failed "
 	echo "===================== Invoke transaction on PEER$PEER on channel '$CHANNEL_NAME' is successful ===================== "
+	echo
+}
+
+chaincodeInvoke(){
+	PEER=$1
+	subjectT=$2
+	predicateT=$3
+	objectT=$4
+	scoreT=$5
+	setGlobals $PEER
+	if [ -z "$CORE_PEER_TLS_ENABLED" -o "$CORE_PEER_TLS_ENABLED" = "false" ] ; then
+		peer chaincode invoke -o orderer.example.com:7050 -C $CHANNEL_NAME -n mycc -c '{"Args":["commitAnswer","'$subjectT'","'$predicateT'","'$objectT'","'$scoreT'"]}' >&log.txt
+	else
+		peer chaincode invoke -o orderer.example.com:7050 --tls $CORE_PEER_TLS_ENABLED --cafile $ORDERER_CA -C $CHANNEL_NAME -n mycc -c '{"Args":["commitAnswer","'$subjectT'","'$predicateT'","'$objectT'","'$scoreT'"]}' >&log.txt
+	fi
+	res=$?
+	cat log.txt
+	verifyResult $res "Invoke execution on PEER$PEER failed "
+	echo "========== Invoke transaction on PEER$PEER on channel '$CHANNEL_NAME' is successful =========="
 	echo
 }
 
@@ -223,19 +271,32 @@ instantiateChaincode 2
 
 #Query on chaincode on Peer0/Org1
 echo "Querying chaincode on org1/peer0..."
-chaincodeQuery 0 100
+#chaincodeQuery 0 100
+#chaincodeQuery 0
+chaincodeQuery 0 xrzhu name
 
 #Invoke on chaincode on Peer0/Org1
 echo "Sending invoke transaction on org1/peer0..."
-chaincodeInvoke 0
-
+#chaincodeInvoke 0 
+chaincodeInvoke 0 xrzhu name zxr 0.6
+chaincodeQuery 0 xrzhu name
+chaincodeInvoke 0 xrzhu name xrzhu 0.1
+chaincodeQuery 0 xrzhu name
+chaincodeInvoke 0 xrzhu name zxr 1.2
+chaincodeQuery 0 xrzhu name
+#chaincodeInvoke 0 xrzhu name xrzhu 0.3
 ## Install chaincode on Peer3/Org2
-echo "Installing chaincode on org2/peer3..."
-installChaincode 3
+#echo "Installing chaincode on org2/peer3..."
+#installChaincode 3
+
+#Invoke on chaincode on Peer3/Org2
+#echo "Sending invoke transaction on org2/peer3..."
+#chaincodeInvoke 3 xrzhu name zxr 0.2
 
 #Query on chaincode on Peer3/Org2, check if the result is 90
-echo "Querying chaincode on org2/peer3..."
-chaincodeQuery 3 90
+#echo "Querying chaincode on org2/peer3..."
+#chaincodeQuery 3 90
+#chaincodeQuery 3 xrzhu name
 
 echo
 echo "===================== All GOOD, End-2-End execution completed ===================== "

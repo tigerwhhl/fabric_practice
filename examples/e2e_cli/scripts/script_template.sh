@@ -20,7 +20,6 @@ ORDERER_CA=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrga
 
 echo "Channel name : "$CHANNEL_NAME
 
-#if parameter!=0, echo error information
 verifyResult () {
 	if [ $1 -ne 0 ] ; then
 		echo "!!!!!!!!!!!!!!! "$2" !!!!!!!!!!!!!!!!"
@@ -30,7 +29,6 @@ verifyResult () {
 	fi
 }
 
-#parameter 0-3,set global environment to individual peer0/1 on org1/2
 setGlobals () {
 
 	if [ $1 -eq 0 -o $1 -eq 1 ] ; then
@@ -56,7 +54,6 @@ setGlobals () {
 	env |grep CORE
 }
 
-#createChannel on peer0/org1
 createChannel() {
 	setGlobals 0
 
@@ -72,7 +69,6 @@ createChannel() {
 	echo
 }
 
-#updateAnchorPeer on peer_parameter
 updateAnchorPeers() {
         PEER=$1
         setGlobals $PEER
@@ -90,8 +86,6 @@ updateAnchorPeers() {
 	echo
 }
 
-# #? display exit status of last command
-# join peer_parameter into channel with timeout-5 and retry-MAXRETRY
 ## Sometimes Join takes time hence RETRY atleast for 5 times
 joinWithRetry () {
 	peer channel join -b $CHANNEL_NAME.block  >&log.txt
@@ -99,8 +93,8 @@ joinWithRetry () {
 	cat log.txt
 	if [ $res -ne 0 -a $COUNTER -lt $MAX_RETRY ]; then
 		COUNTER=` expr $COUNTER + 1`
-		echo "PEER$1 failed to join the channel, Retry after 5 seconds"
-		sleep 5
+		echo "PEER$1 failed to join the channel, Retry after 2 seconds"
+		sleep 2
 		joinWithRetry $1
 	else
 		COUNTER=1
@@ -108,7 +102,6 @@ joinWithRetry () {
         verifyResult $res "After $MAX_RETRY attempts, PEER$ch has failed to Join the Channel"
 }
 
-#join all peers into channel
 joinChannel () {
 	for ch in 0 1 2 3; do
 		setGlobals $ch
@@ -119,7 +112,6 @@ joinChannel () {
 	done
 }
 
-#install chaincode on peer_parameter
 installChaincode () {
 	PEER=$1
 	setGlobals $PEER
@@ -131,7 +123,6 @@ installChaincode () {
 	echo
 }
 
-#instantiate chaincode on peer_parameter only need one and once
 instantiateChaincode () {
 	PEER=$1
 	setGlobals $PEER
@@ -149,7 +140,6 @@ instantiateChaincode () {
 	echo
 }
 
-#invoke chaincode query
 chaincodeQuery () {
   PEER=$1
   echo "===================== Querying on PEER$PEER on channel '$CHANNEL_NAME'... ===================== "
@@ -179,7 +169,6 @@ chaincodeQuery () {
   fi
 }
 
-#invoke chaincode invoke
 chaincodeInvoke () {
 	PEER=$1
 	setGlobals $PEER
