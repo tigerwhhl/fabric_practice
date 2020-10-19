@@ -24,6 +24,8 @@ type Value struct{
 	Score float32 `json:"score"`
 }
 
+
+
 type Triple struct{
 	Subject string `json:"subject"`
 	Predicate string `json:"predicate"`
