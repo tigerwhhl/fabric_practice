@@ -24,14 +24,26 @@ type Value struct{
 	Score float32 `json:"score"`
 }
 
+type Trace struct{
+	Object string `json:"object"`
+	Supporter []string `json:"supporter"`
+}
 
-
-type Triple struct{
+type old_Triple struct{
 	Subject string `json:"subject"`
 	Predicate string `json:"predicate"`
 	Values []Value `json:"values"`
 }
-func (triple *Triple) addCommit(objectT string, scoreT float32){
+
+type Triple struct{
+	Subject string `json:"subject"`
+	Predicate string `json:"predicate"`
+	isSolid bool `json:"issolid"`
+	Values []Value `json:"values"`
+	Answer Trace `json:"answer"`
+}
+
+func (triple *Triple) old_addCommit(objectT string, scoreT float32){
 	found := false
 	for i := range (triple.Values){
 		if triple.Values[i].Object == objectT{
@@ -44,6 +56,27 @@ func (triple *Triple) addCommit(objectT string, scoreT float32){
 		valueT := Value{objectT,scoreT}
 		triple.Values = append(triple.Values,valueT)
 	}
+}
+
+func (triple *Triple) addCommit(objectT string, scoreT float32) (string,bool){
+	if triple.isSolid==true{
+		result := triple.Predicate +" of "triple.Subject+" is solidified: "+triple.Answer.Object
+		return result,true
+	}
+	found := false
+	for i := range (triple.Values){
+		if triple.Values[i].Object == objectT{
+			triple.Values[i].Score += scoreT
+			found = true
+			break
+		}
+	}
+	if found == false{
+		valueT := Value{objectT,scoreT}
+		triple.Values = append(triple.Values,valueT)
+	}
+	result := "succeed voting " +strconv.FormatFloat(scoreT,'E',-1,32)+ " to "+objectT
+	return result,false
 }
 
 func (t *TripleChaincode) Init(stub shim.ChaincodeStubInterface) peer.Response{
@@ -119,7 +152,7 @@ func (t *VoteChaincode) voteUser(stub shim.ChaincodeStubInterface , args []strin
 }
 */
 
-func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []string) peer.Response{
+func (t *TripleChaincode) old_commitAnswer(stub shim.ChaincodeStubInterface, args []string) peer.Response{
 	fmt.Println("Start Commit Answer")
 	triple := Triple{}
 	subjectT := args[0]
@@ -152,6 +185,44 @@ func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []
 	fmt.Println("End Commit Answer")
 	return shim.Success(nil)
 }
+
+func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []string) peer.Response{
+	fmt.Println("Start Commit Answer")
+	triple := Triple{}
+	subjectT := args[0]
+	predicateT := args[1]
+	objectT := args[2]
+	scoreT,err := strconv.ParseFloat(args[3],32)
+//	key,err := stub.CreateCompositeKey(subjectT,[]string{predicateT})
+	key,err := stub.CreateCompositeKey("SP",[]string{subjectT,predicateT})
+	TripleAsBytes,err := stub.GetState(key)
+	if err!=nil{
+		shim.Error("Commit Error One")
+	}
+	if TripleAsBytes!=nil{
+		err = json.Unmarshal(TripleAsBytes,&triple)
+		if err!=nil{
+			shim.Error("Commit Error Unmarshal")
+		}
+	}else{
+		triple = Triple{subjectT,predicateT,[]Value{}}
+	}
+	ans,solid := triple.addCommit(objectT,float32(scoreT))
+	if solid==true{
+		return shim.Success(result)
+	}
+	TripleAsBytes,err = json.Marshal(triple)
+	if err != nil{
+		shim.Error("Commit Error Unmarshal")
+	}
+	err = stub.PutState(key,TripleAsBytes)
+	if err != nil{
+		shim.Error("Commit Error Writing")
+	}
+	fmt.Println("End Commit Answer")
+	return shim.Success(result)
+}
+
 func (t *TripleChaincode) queryAnswers(stub shim.ChaincodeStubInterface, args []string) peer.Response{
 	fmt.Println("Start Query Answers")
 	subjectT := args[0]
@@ -174,17 +245,22 @@ func (t *TripleChaincode) queryAnswers(stub shim.ChaincodeStubInterface, args []
 		shim.Error("Commit Error Unmarshal")
 	}
 	var buffer bytes.Buffer
-	buffer.WriteString("[")
-	buffer.WriteString("Subject: "+triple.Subject+", Predicate: "+triple.Predicate+"\n")
-	isWritten := false
-	for i := range triple.Values{
-		if isWritten == true{
-			buffer.WriteString(",")
+	if triple.isSolid==false{
+		buffer.WriteString("[")
+		buffer.WriteString("Subject: "+triple.Subject+", Predicate: "+triple.Predicate+"\n")
+		isWritten := false
+		for i := range triple.Values{
+			if isWritten == true{
+				buffer.WriteString(",")
+			}
+			buffer.WriteString(triple.Values[i].Object+":"+strconv.FormatFloat(float64(triple.Values[i].Score),'E',-2,64))
+			isWritten = true
 		}
-		buffer.WriteString(triple.Values[i].Object+":"+strconv.FormatFloat(float64(triple.Values[i].Score),'E',-2,64))
-		isWritten = true
+		buffer.WriteString("]")
+	}else{
+		buffer.WriteString("[")
+		//todo: write if issolid==true
 	}
-	buffer.WriteString("]")
 	fmt.Println("End Query Answers")
 	return shim.Success(buffer.Bytes())
 }
