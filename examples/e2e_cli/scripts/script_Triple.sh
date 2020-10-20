@@ -264,6 +264,10 @@ echo "Installing chaincode on org1/peer0..."
 installChaincode 0
 echo "Install chaincode on org2/peer2..."
 installChaincode 2
+echo "Install chaincode on org1/peer1..."
+installChaincode 1
+echo "Install chaincode on org2/peer3..."
+installChaincode 3
 
 #Instantiate chaincode on Peer2/Org2
 echo "Instantiating chaincode on org2/peer2..."
@@ -280,7 +284,23 @@ echo "Sending invoke transaction on org1/peer0..."
 #chaincodeInvoke 0 
 chaincodeInvoke 0 xrzhu name zxr 0.6
 chaincodeQuery 0 xrzhu name
+
 chaincodeInvoke 0 xrzhu name xrzhu 0.1
+chaincodeQuery 0 xrzhu name
+
+chaincodeInvoke 0 xrzhu name xrzhu 2.2
+chaincodeQuery 0 xrzhu name
+chaincodeInvoke 0 xrzhu name xrzhu 0.5
+chaincodeQuery 0 xrzhu name
+
+chaincodeInvoke 0 xrzhu name zxr1 1
+chaincodeQuery 0 xrzhu name
+chaincodeInvoke 0 xrzhu name zxr2 0.5
+chaincodeQuery 0 xrzhu name
+chaincodeQuery 2 xrzhu name
+chaincodeInvoke 2 xrzhu name zxr3 0.2
+chaincodeQuery 0 xrzhu name
+chaincodeInvoke 2 xrzhu name zxr4 0.6
 chaincodeQuery 0 xrzhu name
 chaincodeInvoke 0 xrzhu name zxr 1.2
 chaincodeQuery 0 xrzhu name
