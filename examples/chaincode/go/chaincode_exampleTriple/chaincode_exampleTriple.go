@@ -4,7 +4,7 @@ import(
 	"fmt"
 	"encoding/json"
 	"bytes"
-//	"time"
+	"time"
 	"strconv"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/protos/peer"
@@ -17,10 +17,10 @@ type TripleChaincode struct{
 /*
 type VoteChaincode struct {
 }
-*/
 
 var solidScoreThreshold float64
 var solidObjectThreshold int
+*/
 
 type Value struct{
 	Object string `json:"object"`
@@ -66,7 +66,7 @@ func (triple *Triple) old_addCommit(objectT string, scoreT float64){
 */
 
 func (triple *Triple) addCommit(objectT string, scoreT float64) (string,bool){
-	if triple.IsSolid==true{
+	if (triple.IsSolid==true){
 		result := triple.Predicate +" of "+triple.Subject+" is solidified: "+triple.Answer.Object
 		return result,true
 	}else{
@@ -90,12 +90,14 @@ func (triple *Triple) addCommit(objectT string, scoreT float64) (string,bool){
 }
 
 func (triple * Triple) checkSolid(){
-	if triple.IsSolid==true{
+	solidScoreThreshold := 3.0
+	solidObjectThreshold := 5
+	if (triple.IsSolid==true){
 		return
 	}else{
-		var scoreSum float64 = 0.0
+		scoreSum := 0.0
 		answerT := Trace{}
-		var maxScore float64 = 0.0
+		maxScore := 0.0
 		for i := range(triple.Values){
 			scoreSum += triple.Values[i].Score
 			if triple.Values[i].Score > maxScore{
@@ -103,16 +105,19 @@ func (triple * Triple) checkSolid(){
 				answerT.Object = triple.Values[i].Object
 			}
 		}
-		if (scoreSum>=solidScoreThreshold || len(triple.Values)>=solidObjectThreshold){
+		if ((scoreSum>=solidScoreThreshold) || (len(triple.Values)>=solidObjectThreshold)){
 			triple.IsSolid = true
 			triple.Answer = answerT
+			triple.trackTrace()
 		}
 	}
 }
 
+func (triple * Triple) trackTrace(){
+	
+}
+
 func (t *TripleChaincode) Init(stub shim.ChaincodeStubInterface) peer.Response{
-	solidScoreThreshold = 1.0
-	solidObjectThreshold = 1
 	return shim.Success(nil)
 }
 
@@ -147,6 +152,8 @@ func (t *TripleChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response
 		return t.commitAnswer(stub,args)
 	}else if fn=="queryAnswers"{
 		return t.queryAnswers(stub,args)
+	}else if fn=="getHistory"{
+		return t.getHistory(stub,args)
 	}
 	return shim.Error("Invoke Wrong Method Name!")
 }
@@ -241,6 +248,9 @@ func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []
 	}else{
 		triple = Triple{subjectT,predicateT,IsSolidT,[]Value{},Trace{}}
 	}
+	if (triple.IsSolid==true){
+		return shim.Success([]byte("what the mother fucker"))
+	}
 	result,solid := triple.addCommit(objectT,float64(scoreT))
 	if solid==true{
 		return shim.Success([]byte(result))
@@ -315,7 +325,41 @@ func (t *TripleChaincode) queryAnswers(stub shim.ChaincodeStubInterface, args []
 	fmt.Println("End Query Answers")
 	return shim.Success(buffer.Bytes())
 }
-
+func (t *TripleChaincode) getHistory(stub shim.ChaincodeStubInterface, args []string) peer.Response{
+	fmt.Println("Start GetHistory")
+	subjectT := args[0]
+	predicateT := args[1]
+	key,err := stub.CreateCompositeKey("SP",[]string{subjectT,predicateT})
+	historyInfo,err := stub.GetHistoryForKey(key)
+	if err != nil{
+		return shim.Error("getHistory failed")
+	}
+	if historyInfo == nil{
+		return shim.Error("key not found")
+	} else{
+		defer historyInfo.Close()
+		var buffer bytes.Buffer
+		buffer.WriteString("[")
+		isWritten := false
+		for historyInfo.HasNext(){
+			queryResult,err := historyInfo.Next()
+			if err != nil{
+				return shim.Error(err.Error())
+			}
+			if isWritten == true{
+				buffer.WriteString("\n")
+			}
+			buffer.WriteString("TxID:"+queryResult.TxId+",")
+			buffer.WriteString("Value:"+string(queryResult.Value)+",")
+			buffer.WriteString("IsDelete:"+strconv.FormatBool(queryResult.IsDelete)+",")
+			buffer.WriteString("Timestamp:"+time.Unix(queryResult.Timestamp.Seconds,int64(queryResult.Timestamp.Nanos)).String())
+			isWritten = true
+		}
+		buffer.WriteString("]")
+		fmt.Println("historyInfo of %s of %s:\n%s\n",predicateT,subjectT,buffer.String())
+		return shim.Success(buffer.Bytes())
+	}
+}
 /*
 func (t * VoteChaincode) delUser(stub shim.ChaincodeStubInterface, args []string) peer.Response{
 	fmt.Println("start delUser")
