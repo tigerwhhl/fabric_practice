@@ -3,9 +3,12 @@ package main
 import(
 	"fmt"
 	"encoding/json"
+	"encoding/pem"
+	"crypto/x509"
 	"bytes"
 	"time"
 	"strconv"
+	"errors"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/protos/peer"
 )
@@ -13,14 +16,6 @@ import(
 
 type TripleChaincode struct{
 }
-
-/*
-type VoteChaincode struct {
-}
-
-var solidScoreThreshold float64
-var solidObjectThreshold int
-*/
 
 type Value struct{
 	Object string `json:"object"`
@@ -32,44 +27,39 @@ type Trace struct{
 	Supporter []string `json:"supporter"`
 }
 
-/*
-type old_Triple struct{
-	Subject string `json:"subject"`
-	Predicate string `json:"predicate"`
-	Values []Value `json:"values"`
-}
-*/
-
 type Triple struct{
 	Subject string `json:"subject"`
 	Predicate string `json:"predicate"`
 	IsSolid bool `json:"issolid"`
 	Values []Value `json:"values"`
 	Answer Trace `json:"answer"`
+	Committer string `json:"committer"`
 }
 
-/*
-func (triple *Triple) old_addCommit(objectT string, scoreT float64){
-	found := false
-	for i := range (triple.Values){
-		if triple.Values[i].Object == objectT{
-			triple.Values[i].Score += scoreT
-			found = true
-			break
-		}
-	}
-	if found == false{
-		valueT := Value{objectT,scoreT}
-		triple.Values = append(triple.Values,valueT)
-	}
-}
-*/
-
-func (triple *Triple) addCommit(objectT string, scoreT float64) (string,bool){
+func (triple *Triple) addCommit(stub shim.ChaincodeStubInterface, objectT string, scoreT float64) (string,bool){
 	if (triple.IsSolid==true){
 		result := triple.Predicate +" of "+triple.Subject+" is solidified: "+triple.Answer.Object
 		return result,true
 	}else{
+		creatorByte,_ := stub.GetCreator()
+		certStart := bytes.IndexAny(creatorByte,"-----BEGIN")
+		if certStart == -1{
+			result := "GetCreator Failed: No Cert Found"
+			return result,true
+		}
+		certText := creatorByte[certStart:]
+		bl,_ := pem.Decode(certText)
+		if bl==nil{
+			result := "GetCreator Failed: Decode PEM Failed"
+			return result,true
+		}
+		cert, err := x509.ParseCertificate(bl.Bytes)
+		if err != nil{
+			result := "GetCreator Failed: ParseCert Failed"
+			return result,true
+		}
+		uname := cert.Subject.CommonName
+		triple.Committer = uname
 		found := false
 		for i := range (triple.Values){
 			if triple.Values[i].Object == objectT{
@@ -89,7 +79,7 @@ func (triple *Triple) addCommit(objectT string, scoreT float64) (string,bool){
 	}
 }
 
-func (triple * Triple) checkSolid(){
+func (triple * Triple) checkSolid(stub shim.ChaincodeStubInterface){
 	solidScoreThreshold := 3.0
 	solidObjectThreshold := 5
 	if (triple.IsSolid==true){
@@ -108,44 +98,54 @@ func (triple * Triple) checkSolid(){
 		if ((scoreSum>=solidScoreThreshold) || (len(triple.Values)>=solidObjectThreshold)){
 			triple.IsSolid = true
 			triple.Answer = answerT
-			triple.trackTrace()
+			triple.trackTrace(stub)
 		}
 	}
 }
 
-func (triple * Triple) trackTrace(){
-	
+func (triple * Triple) trackTrace(stub shim.ChaincodeStubInterface){
+	fmt.Println("Start TrackTrace")
+	subjectT := triple.Subject
+	predicateT := triple.Predicate
+	key,err := stub.CreateCompositeKey("SP",[]string{subjectT,predicateT})
+	historyInfo,err := stub.GetHistoryForKey(key)
+	if err != nil{
+		return //shim.Error("getHistory failed")
+	}
+	if historyInfo == nil{
+		return //shim.Error("key not found")
+	}else{
+		defer historyInfo.Close()
+		supportMap := make(map[string]bool)
+		isFirst := true;
+		for historyInfo.HasNext(){
+			queryResult,err := historyInfo.Next()
+			if(err != nil){
+				return //shim.Error(err.Error())
+			}
+			lastValue := Triple{}
+			err = json.Unmarshal(queryResult.Value,&lastValue)
+			if err!=nil {
+				return
+			}
+			if (isFirst){
+				isFirst = false
+				supportMap[lastValue.Committer] = true
+			}else{
+				supportMap[lastValue.Committer] = true
+			}
+		}
+		for  supportName := range supportMap{
+			triple.Answer.Supporter = append(triple.Answer.Supporter,supportName)
+		}
+	}
+
 }
 
 func (t *TripleChaincode) Init(stub shim.ChaincodeStubInterface) peer.Response{
 	return shim.Success(nil)
 }
 
-/*
-type Vote struct {
-	Username string `json:"username"`
-	Votenum int `json:"votenum"`
-}
-func (t *VoteChaincode) Init(stub shim.ChaincodeStubInterface) peer.Response {
-	return shim.Success(nil)
-}
-func (t *VoteChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
-
-	fn , args := stub.GetFunctionAndParameters()
-
-	if fn == "voteUser" {
-		return t.voteUser(stub,args)
-	} else if fn == "getUserVote" {
-		return t.getUserVote(stub,args)
-	} else if fn == "getHistory" {
-		return t.getHistory(stub,args)
-	} else if fn == "delUser" {
-		return t.delUser(stub,args)
-	}
-
-	return shim.Error("Invoke 调用方法有误！")
-}
-*/
 func (t *TripleChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response{
 	fn,args := stub.GetFunctionAndParameters()
 	if fn=="commitAnswer"{
@@ -158,74 +158,9 @@ func (t *TripleChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response
 	return shim.Error("Invoke Wrong Method Name!")
 }
 
-/*
-func (t *VoteChaincode) voteUser(stub shim.ChaincodeStubInterface , args []string) peer.Response{
-	// 查询当前用户的票数，如果用户不存在则新添一条数据，如果存在则给票数加1
-	fmt.Println("start voteUser")
-	vote := Vote{}
-	username := args[0]
-	voteAsBytes, err := stub.GetState(username)
-	if err != nil {
-		shim.Error("voteUser 获取用户信息失败！")
-	}
-
-	if voteAsBytes != nil {
-		err = json.Unmarshal(voteAsBytes, &vote)
-		if err != nil {
-			shim.Error(err.Error())
-		}
-		vote.Votenum += 1
-	}else {
-		vote = Vote{ Username: args[0], Votenum: 1}
-	}
-	//将 Vote 对象 转为 JSON 对象
-	voteJsonAsBytes, err := json.Marshal(vote)
-	if err != nil {
-		shim.Error(err.Error())
-	}
-	err = stub.PutState(username,voteJsonAsBytes)
-	if err != nil {
-		shim.Error("voteUser 写入账本失败！")
-	}
-	fmt.Println("end voteUser")
-	return shim.Success(nil)
-}
-
-func (t *TripleChaincode) old_commitAnswer(stub shim.ChaincodeStubInterface, args []string) peer.Response{
-	fmt.Println("Start Commit Answer")
-	triple := Triple{}
-	subjectT := args[0]
-	predicateT := args[1]
-	objectT := args[2]
-	scoreT,err := strconv.ParseFloat(args[3],32)
-//	key,err := stub.CreateCompositeKey(subjectT,[]string{predicateT})
-	key,err := stub.CreateCompositeKey("SP",[]string{subjectT,predicateT})
-	TripleAsBytes,err := stub.GetState(key)
-	if err!=nil{
-		shim.Error("Commit Error One")
-	}
-	if TripleAsBytes!=nil{
-		err = json.Unmarshal(TripleAsBytes,&triple)
-		if err!=nil{
-			shim.Error("Commit Error Unmarshal")
-		}
-	}else{
-		triple = Triple{subjectT,predicateT,false,[]Value{},Trace{}}
-	}
-	triple.addCommit(objectT,float64(scoreT))
-	TripleAsBytes,err = json.Marshal(triple)
-	if err != nil{
-		shim.Error("Commit Error Unmarshal")
-	}
-	err = stub.PutState(key,TripleAsBytes)
-	if err != nil{
-		shim.Error("Commit Error Writing")
-	}
-	fmt.Println("End Commit Answer")
-	return shim.Success(nil)
-}
-*/
-
+//Chaincode CommitAnswer
+//Before Commit, Query and CheckSolid
+//Invoke Triple.CheckSolid 
 func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []string) peer.Response{
 	fmt.Println("Start Commit Answer")
 	triple := Triple{}
@@ -234,7 +169,6 @@ func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []
 	objectT := args[2]
 	IsSolidT := false
 	scoreT,err := strconv.ParseFloat(args[3],32)
-//	key,err := stub.CreateCompositeKey(subjectT,[]string{predicateT})
 	key,err := stub.CreateCompositeKey("SP",[]string{subjectT,predicateT})
 	TripleAsBytes,err := stub.GetState(key)
 	if err!=nil{
@@ -246,29 +180,17 @@ func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []
 			shim.Error("Commit Error Unmarshal")
 		}
 	}else{
-		triple = Triple{subjectT,predicateT,IsSolidT,[]Value{},Trace{}}
+		triple = Triple{subjectT,predicateT,IsSolidT,[]Value{},Trace{},"NoBody"}
 	}
 	if (triple.IsSolid==true){
-		return shim.Success([]byte("what the mother fucker"))
+		return shim.Success([]byte("Commit Failed Because Triple Is Solid"))
+//		return shim.Success([]byte("what the mother fucker"))
 	}
-	result,solid := triple.addCommit(objectT,float64(scoreT))
+	result,solid := triple.addCommit(stub,objectT,float64(scoreT))
 	if solid==true{
 		return shim.Success([]byte(result))
 	}
-	/*
-	if solid==true{
-		return shim.Success([]byte(result+"woqunimalagebi"))
-	}
-	temp := ""
-	if triple.isSolid==false{
-		temp = temp+"???"
-	}
-	triple.checkSolid()
-	if triple.isSolid==true{
-		return shim.Success([]byte(temp+"what the motherfucker"))
-	}
-	*/
-	triple.checkSolid()
+	triple.checkSolid(stub)
 	if triple.IsSolid==true{
 		result = "isSolid what the fuck\n"+result
 	}
@@ -284,18 +206,50 @@ func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []
 	return shim.Success([]byte(result))
 }
 
+//Function for CheckSolid to Invoke
+//Compare Neighbour Logs For Diff
+//Reutrn Addition of Latter Log and Error Information
+func compareTriple(Triple last,Triple present) string,error{
+	valueListL := last.Values
+	valueListP := present.Values
+	found := false
+	result := string{}
+	if len(valueListL)>len(valueListP){
+		return "Something Wrong",error.New("Present List Longer Than Last")
+	}
+	if len(valueListL)==len(valueListP){
+		for i := range(valueListL){
+			if(valueListL[i].Object!=valueListP[i].Object){
+				return "Something Wrong",error.New("Value List Changed")
+			}
+			if(valueListP[i].Score-valueListL[i].Score>0.001){
+				if(found){
+					return "Something Wrong",error.New("More Than One Diff")
+				}
+				result = valueListL[i].Object
+				found = true
+			}
+		}
+		return result,nil
+	}else if len(valueListL)+1==len(valueListP){
+		result = valueListP[len(valueListL)]
+		return result,nil
+	}else{
+		return "Something Wrong",error.New("More Than One Diff")
+	}
+}
+
+//Chaincode QueryAnswers to Respond to Query on Triples of Detailed Subject&Predicate
+//If Solid, Return Answer&Supporter
+//If Not, Return AnswerList&Score
 func (t *TripleChaincode) queryAnswers(stub shim.ChaincodeStubInterface, args []string) peer.Response{
 	fmt.Println("Start Query Answers")
 	subjectT := args[0]
 	predicateT := args[1]
-//	logger := shim.NewLogger("myLogger")
-//	logger.Info(subjectT+"\t"+predicateT)
-//	return shim.Error(subjectT)
-//	fmt.Printf("%s\t%s",subjectT,predicateT)
 	key,err := stub.CreateCompositeKey("SP",[]string{subjectT,predicateT})
 	TripleAsBytes,err := stub.GetState(key)
 	if err != nil{
-		return shim.Error("Query Error One")
+		return shim.Error("Error Caused Query CompositeKey")
 	}
 	if TripleAsBytes==nil{
 		return shim.Success([]byte("Query No Such Record"))
@@ -303,7 +257,7 @@ func (t *TripleChaincode) queryAnswers(stub shim.ChaincodeStubInterface, args []
 	triple := Triple{}
 	err = json.Unmarshal(TripleAsBytes,&triple)
 	if err != nil{
-		return shim.Error("Commit Error Unmarshal")
+		return shim.Error("Query Error Unmarshal")
 	}
 	var buffer bytes.Buffer
 	if triple.IsSolid==false{
@@ -320,11 +274,23 @@ func (t *TripleChaincode) queryAnswers(stub shim.ChaincodeStubInterface, args []
 		buffer.WriteString("]")
 	}else{
 		buffer.WriteString("[")
-		buffer.WriteString("Subject: "+triple.Subject+", Predicate: "+triple.Predicate+", Object: "+triple.Answer.Object+"]\n")
+		buffer.WriteString("Subject: "+triple.Subject+", Predicate: "+triple.Predicate+", Object: "+triple.Answer.Object+", Supporter: ")
+		isFirst := true
+		for i := range triple.Answer.Supporter{
+			if isFirst{
+				buffer.WriteString(triple.Answer.Supporter[i])
+				isFirst = false;
+			}else{
+				buffer.WriteString(", "+triple.Answer.Supporter[i])
+			}
+		}
+		buffer.WriteString(" ]")
 	}
 	fmt.Println("End Query Answers")
 	return shim.Success(buffer.Bytes())
 }
+
+//Chaincode GetHistory to Test GetHistoryForKey Function, Not In Use Currently
 func (t *TripleChaincode) getHistory(stub shim.ChaincodeStubInterface, args []string) peer.Response{
 	fmt.Println("Start GetHistory")
 	subjectT := args[0]
@@ -360,92 +326,8 @@ func (t *TripleChaincode) getHistory(stub shim.ChaincodeStubInterface, args []st
 		return shim.Success(buffer.Bytes())
 	}
 }
-/*
-func (t * VoteChaincode) delUser(stub shim.ChaincodeStubInterface, args []string) peer.Response{
-	fmt.Println("start delUser")
-	if len(args)!=1{
-		return shim.Error("delUser expecting 1 parameter")
-	}
-	err := stub.DelState(args[0])
-	if err != nil{
-		return shim.Error("failed to delUser "+args[0])
-	}
-	return shim.Success(nil)
-}
-func (t *VoteChaincode) getHistory(stub shim.ChaincodeStubInterface, args []string) peer.Response{
-	fmt.Println("start getHistory")
-	userName := args[0]
-	historyInfo,err := stub.GetHistoryForKey(userName)
-	if err != nil{
-		return shim.Error("getHistory failed")
-	}
-	if historyInfo == nil{
-		return shim.Error("key not found")
-	} else{
-		defer historyInfo.Close()
-		var buffer bytes.Buffer
-		buffer.WriteString("[")
-		isWritten := false
-		for historyInfo.HasNext(){
-			queryResult,err := historyInfo.Next()
-			if err != nil{
-				return shim.Error(err.Error())
-			}
-			if isWritten == true{
-				buffer.WriteString("\n")
-			}
-			buffer.WriteString("TxID:"+queryResult.TxId+",")
-			buffer.WriteString("Value:"+string(queryResult.Value)+",")
-			buffer.WriteString("IsDelete:"+strconv.FormatBool(queryResult.IsDelete)+",")
-			buffer.WriteString("Timestamp:"+time.Unix(queryResult.Timestamp.Seconds,int64(queryResult.Timestamp.Nanos)).String())
-			isWritten = true
-		}
-		buffer.WriteString("]")
-		fmt.Println("historyInfo of %s:\n%s\n",userName,buffer.String())
-		return shim.Success(buffer.Bytes())
-	}
-}
-func (t *VoteChaincode) getUserVote(stub shim.ChaincodeStubInterface, args []string) peer.Response{
-	fmt.Println("start getUserVote")
-	// 获取所有用户的票数
-	resultIterator, err := stub.GetStateByRange("","")
-	if err != nil {
-		return shim.Error("获取用户票数失败！")
-	}
-	defer resultIterator.Close()
 
-	var buffer bytes.Buffer
-	buffer.WriteString("[")
-
-	isWritten := false
-
-	for resultIterator.HasNext() {
-		queryResult , err := resultIterator.Next()
-		if err != nil {
-			return shim.Error(err.Error())
-		}
-
-		if isWritten == true {
-			buffer.WriteString(",")
-		}
-
-		buffer.WriteString(string(queryResult.Value))
-		isWritten = true
-	}
-
-	buffer.WriteString("]")
-
-	fmt.Printf("查询结果：\n%s\n",buffer.String())
-	fmt.Println("end getUserVote")
-	return shim.Success(buffer.Bytes())
-}
-func main(){
-	err := shim.Start(new(VoteChaincode))
-	if err != nil {
-		fmt.Println("vote chaincode start err")
-	}
-}
-*/
+//Instantiate chaincode
 func main(){
 	err := shim.Start(new(TripleChaincode))
 	if err != nil{
