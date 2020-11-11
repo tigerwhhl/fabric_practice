@@ -7,6 +7,7 @@ import(
 	"crypto/x509"
 	"bytes"
 	"time"
+	//"reflect"
 	"strconv"
 	"errors"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
@@ -17,16 +18,24 @@ import(
 type TripleChaincode struct{
 }
 
+//Candidate Objects and Scores
 type Value struct{
 	Object string `json:"object"`
 	Score float64 `json:"score"`
 }
 
+//Trace Information of Answer
 type Trace struct{
 	Object string `json:"object"`
 	Supporter []string `json:"supporter"`
 }
 
+/*
+Triple Structure
+IsSolid Means No More Change
+Committer Means Committer of this Log
+IsSolid==1 return Answer ; IsSolid==0 return Values
+*/
 type Triple struct{
 	Subject string `json:"subject"`
 	Predicate string `json:"predicate"`
@@ -36,6 +45,31 @@ type Triple struct{
 	Committer string `json:"committer"`
 }
 
+/*
+Copy for Slice
+Big Problem
+Disaster
+*/
+func (triple *Triple) copy() Triple{
+	newT := Triple{}
+	newT.Subject = triple.Subject
+	newT.Predicate = triple.Predicate
+	newT.IsSolid = triple.IsSolid
+	newT.Values = make([]Value,len(triple.Values))
+	copy(newT.Values,triple.Values)
+	newT.Answer = Trace{}
+	newT.Answer.Object = triple.Answer.Object
+	newT.Answer.Supporter =make([]string,len(triple.Answer.Supporter))
+	copy(newT.Answer.Supporter,triple.Answer.Supporter)
+	newT.Committer = triple.Committer
+	return newT
+}
+
+/*
+Invoked by CommitAnswer
+Require Object and Score
+Return result and whether solid
+*/
 func (triple *Triple) addCommit(stub shim.ChaincodeStubInterface, objectT string, scoreT float64) (string,bool){
 	if (triple.IsSolid==true){
 		result := triple.Predicate +" of "+triple.Subject+" is solidified: "+triple.Answer.Object
@@ -79,6 +113,10 @@ func (triple *Triple) addCommit(stub shim.ChaincodeStubInterface, objectT string
 	}
 }
 
+/*
+Check If Triple Satisfy the Condition to be Solid
+If Number of Candidate Answers or Sum of Score >= Threshold -> Solid It
+*/
 func (triple * Triple) checkSolid(stub shim.ChaincodeStubInterface){
 	solidScoreThreshold := 3.0
 	solidObjectThreshold := 5
@@ -103,6 +141,10 @@ func (triple * Triple) checkSolid(stub shim.ChaincodeStubInterface){
 	}
 }
 
+/*
+Invoke by CheckSolid
+Solid the Answer and Supporter via Comparison of History(Log&Committer)
+*/
 func (triple * Triple) trackTrace(stub shim.ChaincodeStubInterface){
 	fmt.Println("Start TrackTrace")
 	subjectT := triple.Subject
@@ -117,23 +159,44 @@ func (triple * Triple) trackTrace(stub shim.ChaincodeStubInterface){
 	}else{
 		defer historyInfo.Close()
 		supportMap := make(map[string]bool)
-		isFirst := true;
+		isFirst := true
+		lastValue := Triple{}
+		presentValue := Triple{}
 		for historyInfo.HasNext(){
 			queryResult,err := historyInfo.Next()
 			if(err != nil){
 				return //shim.Error(err.Error())
 			}
-			lastValue := Triple{}
-			err = json.Unmarshal(queryResult.Value,&lastValue)
+			//lastValue := Triple{}
+			//presentValue := Triple{}
+			//lastValue = presentValue
+			//copy(lastValue,presentValue)
+			lastValue = presentValue.copy()
+			err = json.Unmarshal(queryResult.Value,&presentValue)
 			if err!=nil {
 				return
 			}
 			if (isFirst){
 				isFirst = false
-				supportMap[lastValue.Committer] = true
+				//lastValue = queryResult
+				//supportMap[presentValue.Committer] = true
+				if presentValue.Values[0].Object==triple.Answer.Object{
+					supportMap[presentValue.Committer] = true
+					//triple.Answer.Supporter = append(triple.Answer.Supporter,presentValue.Committer)
+				}
+				//supportMap[lastValue.Committer] = true
 			}else{
-				supportMap[lastValue.Committer] = true
+				//supportMap[presentValue.Committer] = true
+				logChange,err := compareTriple(lastValue,presentValue)
+				//triple.Answer.Supporter = append(triple.Answer.Supporter,logChange)
+				//supportMap[logChange] = true
+				//triple.Answer.Supporter = append(triple.Answer.Supporter,logChange)
+				//triple.Answer.Supporter = append(triple.Answer.Supporter,logChange)
+				if ((err==nil)&&(logChange==triple.Answer.Object)){
+					supportMap[presentValue.Committer] = true
+				}
 			}
+			//supportMap[presentValue.Committer] = true
 		}
 		for  supportName := range supportMap{
 			triple.Answer.Supporter = append(triple.Answer.Supporter,supportName)
@@ -146,6 +209,9 @@ func (t *TripleChaincode) Init(stub shim.ChaincodeStubInterface) peer.Response{
 	return shim.Success(nil)
 }
 
+/*
+Invoke Different Method
+*/
 func (t *TripleChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response{
 	fn,args := stub.GetFunctionAndParameters()
 	if fn=="commitAnswer"{
@@ -209,33 +275,42 @@ func (t *TripleChaincode) commitAnswer(stub shim.ChaincodeStubInterface, args []
 //Function for CheckSolid to Invoke
 //Compare Neighbour Logs For Diff
 //Reutrn Addition of Latter Log and Error Information
-func compareTriple(Triple last,Triple present) string,error{
+//Something Wrong Here, Always Return Empty Result String
+func compareTriple(last Triple,present Triple) (string,error){
 	valueListL := last.Values
 	valueListP := present.Values
 	found := false
-	result := string{}
+	result := "wtf"
 	if len(valueListL)>len(valueListP){
-		return "Something Wrong",error.New("Present List Longer Than Last")
+		return "Something Wrong 1",errors.New("Last List Longer Than Present")
 	}
 	if len(valueListL)==len(valueListP){
 		for i := range(valueListL){
-			if(valueListL[i].Object!=valueListP[i].Object){
-				return "Something Wrong",error.New("Value List Changed")
+			if (valueListL[i].Object!=valueListP[i].Object){
+				//return "Something Wrong 2"+valueListL[i].Object+valueListP[i].Object,errors.New("Value List Changed")
+				return "Something Wrong 2",errors.New("Value List Changed")
 			}
-			if(valueListP[i].Score-valueListL[i].Score>0.001){
+			//result += valueListL[i].Object
+			//result += reflect.TypeOf(valueListP[i].Score)
+			//result += strconv.FormatFloat(valueListL[i].Score,'g',1,64)
+			//result += strconv.FormatFloat(valueListP[i].Score,'g',1,64)
+			//result += "\t"
+			if (float64(valueListP[i].Score-valueListL[i].Score)>0.01){
 				if(found){
-					return "Something Wrong",error.New("More Than One Diff")
+					return "Something Wrong 3 MTOD",errors.New("More Than One Diff")
 				}
+				//return valueListL[i].Object,nil
 				result = valueListL[i].Object
 				found = true
 			}
 		}
 		return result,nil
-	}else if len(valueListL)+1==len(valueListP){
-		result = valueListP[len(valueListL)]
+	}else if (len(valueListL)+1)==len(valueListP){
+		result = valueListP[len(valueListL)].Object
 		return result,nil
 	}else{
-		return "Something Wrong",error.New("More Than One Diff")
+		//return "Something Wrong 4 MTOD"+strconv.Itoa(len(valueListL))+" "+strconv.Itoa(len(valueListP)),errors.New("More Than One Diff")
+		return "Something Wrong 4 MTOD",errors.New("More Than One Diff")
 	}
 }
 
